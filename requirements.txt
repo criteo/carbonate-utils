@@ -1,0 +1,6 @@
+zope.interface # Hidden dependency of Twisted
+Twisted==11.1.0
+carbon
+whisper
+carbonate
+progressbar2
