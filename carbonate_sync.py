@@ -2,6 +2,7 @@
 
 from __future__ import print_function
 
+import collections
 import errno
 import getpass
 import inspect
@@ -28,6 +29,7 @@ import carbonate.sync as carbonate_sync
 import carbonate.util as carbonate_util
 
 _DEFAULT_TMP_DIR = tempfile.gettempdir()
+_MAX_PARALLEL_RSYNC = 4
 
 HAVE_HEAL_WITH_TIME_RANGE = (
     set(['start_time', 'end_time']) <=
@@ -119,26 +121,27 @@ def info(msg=''):
     logging.info(msg)
 
 
-def _fetch_from_remote(remote_user, remote_host, metrics_fs, staging_dir,
-                       rsync_options=RSYNC_OPTIONS, ssh_options=SSH_OPTIONS):
+def _fetch_from_remote(batch):
     """Fetch a remote list of files using rsync."""
-    remote = '%s@%s:%s/' % (remote_user, remote_host, STORAGE_DIR)
+    remote = '%s@%s:%s/' % (batch.remote_user, batch.remote_node, STORAGE_DIR)
     with tempfile.NamedTemporaryFile('w', delete=False) as f:
-        for m in metrics_fs:
+        for m in batch.metrics_fs:
             print(m, file=f)
         f.flush()
-        ssh_cmd = 'ssh ' + ' '.join(MANDATORY_SSH_OPTIONS + ssh_options)
+        ssh_cmd = 'ssh ' + ' '.join(MANDATORY_SSH_OPTIONS + batch.ssh_options)
         cmd = [
             'rsync',
             '--rsh', ssh_cmd,
             '--files-from=%s' % f.name,
         ]
-        cmd += rsync_options
+        cmd += batch.rsync_options
         cmd += [
             remote,
-            staging_dir,
+            batch.staging_dir,
         ]
         _run(cmd)
+
+    return batch
 
 
 def _make_staging_dir(base_dir, node):
@@ -153,45 +156,82 @@ def _make_staging_dir(base_dir, node):
     return dirname
 
 
-def _heal(args_and_metric):
+def _heal(batch):
     """Heal whisper files.
 
     This method will backfill data present in files in the
     staging dir if not present in the local files for
     points between 'start' and 'stop' (unix timestamps).
     """
-    args, metric = args_and_metric
-    staging_dir, start, end = args
-    src = os.path.join(staging_dir, metric)
-    dst = os.path.join(STORAGE_DIR, metric)
-    if HAVE_HEAL_WITH_TIME_RANGE:
-        carbonate_sync.heal_metric(src, dst, start_time=start, end_time=end)
+
+    for metric in batch.metrics_fs:
+        src = os.path.join(batch.staging_dir, metric)
+        dst = os.path.join(STORAGE_DIR, metric)
+        if HAVE_HEAL_WITH_TIME_RANGE:
+            carbonate_sync.heal_metric(
+                src, dst, start_time=batch.start_time, end_time=batch.end_time)
+        else:
+            carbonate_sync.heal_metric(src, dst)
+
+    return batch
+
+class _Batch(collections.namedtuple('_Batch',
+    ['staging_dir', 'metrics_fs',
+     'start_time', 'end_time',
+     'remote_user', 'remote_node',
+     'rsync_options', 'ssh_options'])):
+
+    def split_chunks(self, chunksize):
+        res = []
+        for n in range(0, len(self.metrics_fs), chunksize):
+            new_batch = self._replace(metrics_fs=self.metrics_fs[n:n+chunksize])
+            res.append(new_batch)
+        return res
+
+    @property
+    def metrics_number(self):
+        return len(self.metrics_fs)
+
+
+def _fetch_merge(fetch_batches, update_cb):
+    """fetch & merge files in the staging directory with local files."""
+    total_metrics_number = sum(b.metrics_number for b in fetch_batches)
+
+    # Estimates how many percent of total time is fetching data
+    fetch_percent = 10
+    heal_percent = 100 - fetch_percent
+
+    work_done = 0
+    update_cb(work_done)
+
+    if not PARALLEL:
+        for batch in fetch_batches:
+            _fetch_from_remote(batch)
+            _heal(batch)
+            work_done += batch.metrics_number * (fetch_percent + heal_percent)
+            update_cb(work_done // total_metrics_number)
     else:
-        carbonate_sync.heal_metric(src, dst)
+        rsync_workers = multiprocessing.Pool(_MAX_PARALLEL_RSYNC)
+        heal_workers = multiprocessing.Pool()
 
+        for batch_fetched in rsync_workers.imap_unordered(_fetch_from_remote, fetch_batches):
+            # Updates estimate of work done
+            work_done += fetch_percent * batch_fetched.metrics_number
+            update_cb(work_done // total_metrics_number)
 
-def _merge_from_staging(staging_dir, metrics_fs, update_cb, chunksize,
-                        start, end):
-    """Merge files in the staging directory with local files."""
+            # Subdivides heal batches to ensure we use all CPUs.
+            # Smaller batches increases serialisation overhead.
+            heal_chunksize = batch_fetched.metrics_number / multiprocessing.cpu_count()
+            heal_batches = batch_fetched.split_chunks(heal_chunksize)
+            # This waits for all chunks of a fetch to heal before healing the next fetch.
+            # This is OK as heal chunks are all about the same size and will complete at once.
+            for batch_healed in heal_workers.imap_unordered(_heal, heal_batches):
+                work_done += heal_percent * batch_healed.metrics_number
+                update_cb(work_done // total_metrics_number)
 
-    # An iterable of pairs of ((staging_dir, start, end), metric)
-    args = staging_dir, start, end
-    args_and_metrics = itertools.izip(itertools.repeat(args), metrics_fs)
-
-    done = 0
-    update_cb(done)
-
-    if PARALLEL:
-        workers = multiprocessing.Pool()
-        for _ in workers.imap_unordered(
-                _heal, args_and_metrics, chunksize=chunksize):
-            done += 1
-            update_cb(done)
-        workers.close()
-        workers.join()
-    else:
-        for i in args_and_metrics:
-            _heal(i)
+        for workers in rsync_workers, heal_workers:
+            workers.close()
+            workers.join()
 
 
 def _get_nodes(config, cluster_name, node=None):
@@ -220,7 +260,7 @@ def _parse_args():
     parser.add_argument(
         '-b', '--batch-size',
         default=1000,
-        help='Batch size for the merge job.')
+        help='Batch size for fetching metrics.')
 
     parser.add_argument(
         '--ssh-options',
@@ -281,7 +321,6 @@ def main():
     local_user = config.ssh_user(local_cluster)
     local_node = args.node
     remote_cluster = args.remote_cluster
-    remote_user = config.ssh_user(remote_cluster)
     remote_nodes = _get_nodes(config, remote_cluster, node=local_node)
     base_dir = args.temp_dir
 
@@ -292,7 +331,7 @@ def main():
          (local_node, local_cluster, remote_cluster))
 
     for n, node in enumerate(remote_nodes):
-        info('- Syncing node %s (%d/%d)' % (node, n, len(remote_nodes)))
+        info('- Syncing node %s (%d/%d)' % (node, n+1, len(remote_nodes)))
         info('- %s: Listing metrics' % node)
 
         metrics = _list_metrics(
@@ -301,18 +340,20 @@ def main():
         staging_dir = _make_staging_dir(base_dir, node)
         metrics_fs = [carbonate_util.metric_to_fs(m) for m in metrics]
 
-        info('- %s: Fetching %d metrics' % (node, len(metrics)))
-        _fetch_from_remote(remote_user, node, metrics_fs, staging_dir,
-                           rsync_options=args.rsync_options,
-                           ssh_options=args.ssh_options)
+        batches = _Batch(
+            staging_dir=staging_dir,
+            metrics_fs=metrics_fs,
+            start_time=args.start_time,
+            end_time=args.end_time,
+            remote_user=config.ssh_user(remote_cluster),
+            remote_node=node,
+            rsync_options=args.rsync_options,
+            ssh_options=args.ssh_options,
+        ).split_chunks(args.batch_size)
 
-        info('- %s: Merging %s metrics' % (node, len(metrics)))
-        with progressbar.ProgressBar(
-                max_value=len(metrics), redirect_stdout=True) as bar:
-            _merge_from_staging(staging_dir, metrics_fs, bar.update,
-                                chunksize=args.batch_size,
-                                start=args.start_time,
-                                end=args.end_time)
+        info('- %s: Merging and fetching %s metrics' % (node, len(metrics)))
+        with progressbar.ProgressBar(redirect_stdout=True) as bar:
+            _fetch_merge(batches, bar.update)
 
         info('  %s: Cleaning up' % node)
         shutil.rmtree(staging_dir)
