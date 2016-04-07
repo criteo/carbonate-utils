@@ -4,19 +4,20 @@ from __future__ import print_function
 
 import errno
 import getpass
+import inspect
 import itertools
 import logging
 import multiprocessing
 import os
 import progressbar
+import re
+import shlex
 import shutil
 import socket
 import subprocess
 import sys
 import tempfile
 import time
-import shlex
-import re
 
 from carbon import util
 import carbonate.cli as carbonate_cli
@@ -27,6 +28,11 @@ import carbonate.sync as carbonate_sync
 import carbonate.util as carbonate_util
 
 _DEFAULT_TMP_DIR = tempfile.gettempdir()
+
+HAVE_HEAL_WITH_TIME_RANGE = (
+    set(['start_time', 'end_time']) <=
+    set(inspect.getargspec(carbonate_sync.heal_metric).args))
+
 STORAGE_DIR = carbonate_cli.STORAGE_DIR
 
 MANDATORY_SSH_OPTIONS = [
@@ -156,12 +162,12 @@ def _heal(args_and_metric):
     """
     args, metric = args_and_metric
     staging_dir, start, end = args
-    carbonate_sync.heal_metric(
-        os.path.join(staging_dir, metric),
-        os.path.join(STORAGE_DIR, metric),
-        # TODO(c.chary): implement that in carbonate
-        # start=start, end=end
-    )
+    src = os.path.join(staging_dir, metric)
+    dst = os.path.join(STORAGE_DIR, metric)
+    if HAVE_HEAL_WITH_TIME_RANGE:
+        carbonate_sync.heal_metric(src, dst, start_time=start, end_time=end)
+    else:
+        carbonate_sync.heal_metric(src, dst)
 
 
 def _merge_from_staging(staging_dir, metrics_fs, update_cb, chunksize,
@@ -255,6 +261,7 @@ def _parse_args():
     # We want lists for these options.
     args.rsync_options = shlex.split(args.rsync_options)
     args.ssh_options = shlex.split(args.ssh_options)
+    args.exclude = args.exclude.split(',')
     return args
 
 
