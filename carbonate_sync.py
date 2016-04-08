@@ -100,7 +100,7 @@ def _filter_metrics(metrics, exclude):
     """Exclude metrics matching a list of regexp."""
     for pattern in exclude:
         regex = re.compile(pattern)
-        metrics = [m for m in metrics if not regex.match(m)]
+        metrics = [m for m in metrics if not regex.search(m)]
     return metrics
 
 

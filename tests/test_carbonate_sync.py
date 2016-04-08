@@ -11,7 +11,7 @@ class TestCarbonateSync(unittest.TestCase):
         self.assertEquals(ret, ['test la'])
 
     def test_filter_metrics(self):
-        exclude = ['^carbon\.',  '.*\.foo$']
+        exclude = ['^carbon\.',  '\.foo$']
         metrics = [
             'carbon.bar',
             'carbonfoo.bar',
