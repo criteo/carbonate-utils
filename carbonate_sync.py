@@ -171,11 +171,16 @@ def _heal(batch):
     for metric in batch.metrics_fs:
         src = os.path.join(batch.staging_dir, metric)
         dst = os.path.join(STORAGE_DIR, metric)
-        if HAVE_HEAL_WITH_TIME_RANGE:
-            carbonate_sync.heal_metric(
-                src, dst, start_time=batch.start_time, end_time=batch.end_time)
-        else:
-            carbonate_sync.heal_metric(src, dst)
+        try:
+            if HAVE_HEAL_WITH_TIME_RANGE:
+                carbonate_sync.heal_metric(
+                    src, dst,
+                    start_time=batch.start_time,
+                    end_time=batch.end_time)
+            else:
+                carbonate_sync.heal_metric(src, dst)
+        except Exception as e:
+            logging.exception("Failed to heal %s" % dst)
 
     return batch
 
