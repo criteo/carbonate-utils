@@ -22,10 +22,6 @@ import time
 
 import whisper
 
-# Enable locking when available to avoid data corruption.
-if whisper.CAN_LOCK:
-    whisper.LOCK = True
-
 from carbon import util
 import carbonate.cli as carbonate_cli
 import carbonate.config as carbonate_config
@@ -33,6 +29,10 @@ import carbonate.cluster as carbonate_cluster
 import carbonate.sieve as carbonate_sieve
 import carbonate.sync as carbonate_sync
 import carbonate.util as carbonate_util
+
+# Enable locking when available to avoid data corruption.
+if whisper.CAN_LOCK:
+    whisper.LOCK = True
 
 _DEFAULT_TMP_DIR = tempfile.gettempdir()
 _MAX_PARALLEL_RSYNC = 4
@@ -70,7 +70,9 @@ DEFAULT_EXCLUDE = [
 # purposes.
 PARALLEL = True
 
+
 class Error(Exception):
+
     """Base class for exceptions from this module."""
 
 
@@ -97,7 +99,8 @@ def _run(cmd, *args, **kwargs):
 
 def _ssh(host, cmd, ssh_options=SSH_OPTIONS):
     """ssh to an host and run a command."""
-    ssh_cmd = ['ssh'] + MANDATORY_SSH_OPTIONS + ssh_options + [host, '--'] + cmd
+    ssh_cmd = ['ssh'] + MANDATORY_SSH_OPTIONS + \
+        ssh_options + [host, '--'] + cmd
     return _run(ssh_cmd)
 
 
@@ -184,16 +187,18 @@ def _heal(batch):
 
     return batch
 
+
 class _Batch(collections.namedtuple('_Batch',
-    ['staging_dir', 'metrics_fs',
-     'start_time', 'end_time',
-     'remote_user', 'remote_node',
-     'rsync_options', 'ssh_options'])):
+                                    ['staging_dir', 'metrics_fs',
+                                     'start_time', 'end_time',
+                                     'remote_user', 'remote_node',
+                                     'rsync_options', 'ssh_options'])):
 
     def split_chunks(self, chunksize):
         res = []
         for n in range(0, len(self.metrics_fs), chunksize):
-            new_batch = self._replace(metrics_fs=self.metrics_fs[n:n+chunksize])
+            new_batch = self._replace(
+                metrics_fs=self.metrics_fs[n:n + chunksize])
             res.append(new_batch)
         return res
 
@@ -223,18 +228,23 @@ def _fetch_merge(fetch_batches, update_cb):
         rsync_workers = multiprocessing.Pool(_MAX_PARALLEL_RSYNC)
         heal_workers = multiprocessing.Pool()
 
-        for batch_fetched in rsync_workers.imap_unordered(_fetch_from_remote, fetch_batches):
+        for batch_fetched in rsync_workers.imap_unordered(
+                _fetch_from_remote, fetch_batches):
             # Updates estimate of work done
             work_done += fetch_percent * batch_fetched.metrics_number
             update_cb(work_done // total_metrics_number)
 
             # Subdivides heal batches to ensure we use all CPUs.
             # Smaller batches increases serialisation overhead.
-            heal_chunksize = batch_fetched.metrics_number / multiprocessing.cpu_count()
+            heal_chunksize = batch_fetched.metrics_number / \
+                multiprocessing.cpu_count()
             heal_batches = batch_fetched.split_chunks(heal_chunksize)
-            # This waits for all chunks of a fetch to heal before healing the next fetch.
-            # This is OK as heal chunks are all about the same size and will complete at once.
-            for batch_healed in heal_workers.imap_unordered(_heal, heal_batches):
+            # This waits for all chunks of a fetch to heal before healing the
+            # next fetch.
+            # This is OK as heal chunks are all about the same size and will
+            # complete at once.
+            for batch_healed in heal_workers.imap_unordered(
+                    _heal, heal_batches):
                 work_done += heal_percent * batch_healed.metrics_number
                 update_cb(work_done // total_metrics_number)
 
@@ -340,7 +350,7 @@ def main():
          (local_node, local_cluster, remote_cluster))
 
     for n, node in enumerate(remote_nodes):
-        info('- Syncing node %s (%d/%d)' % (node, n+1, len(remote_nodes)))
+        info('- Syncing node %s (%d/%d)' % (node, n + 1, len(remote_nodes)))
         info('- %s: Listing metrics' % node)
 
         metrics = _list_metrics(
