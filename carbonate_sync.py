@@ -20,6 +20,12 @@ import sys
 import tempfile
 import time
 
+import whisper
+
+# Enable locking when available to avoid data corruption.
+if whisper.CAN_LOCK:
+    whisper.LOCK = True
+
 from carbon import util
 import carbonate.cli as carbonate_cli
 import carbonate.config as carbonate_config
@@ -63,7 +69,6 @@ DEFAULT_EXCLUDE = [
 # Set to False to use the slow and serialized version. For debug
 # purposes.
 PARALLEL = True
-
 
 class Error(Exception):
     """Base class for exceptions from this module."""
@@ -163,7 +168,6 @@ def _heal(batch):
     staging dir if not present in the local files for
     points between 'start' and 'stop' (unix timestamps).
     """
-
     for metric in batch.metrics_fs:
         src = os.path.join(batch.staging_dir, metric)
         dst = os.path.join(STORAGE_DIR, metric)
