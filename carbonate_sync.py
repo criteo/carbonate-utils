@@ -196,7 +196,7 @@ class _Batch(collections.namedtuple('_Batch',
 
     def split_chunks(self, chunksize):
         res = []
-        for n in range(0, len(self.metrics_fs), chunksize):
+        for n in range(0, len(self.metrics_fs), max(1, chunksize)):
             new_batch = self._replace(
                 metrics_fs=self.metrics_fs[n:n + chunksize])
             res.append(new_batch)
