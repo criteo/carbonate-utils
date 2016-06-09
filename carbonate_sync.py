@@ -11,6 +11,7 @@ import logging
 import multiprocessing
 import os
 import progressbar
+import random
 import re
 import shlex
 import shutil
@@ -360,6 +361,8 @@ def main():
     info('- I am %s part of cluster %s and trying to sync with %s' %
          (local_node, local_cluster, remote_cluster))
 
+    remote_nodes = list(remote_nodes)
+    random.shuffle(remote_nodes)
     for n, node in enumerate(remote_nodes):
         info('- Syncing node %s (%d/%d)' % (node, n + 1, len(remote_nodes)))
         info('- %s: Listing metrics' % node)
