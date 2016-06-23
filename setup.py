@@ -19,7 +19,7 @@ def read(fname):
 
 setup(
     name="carbonate-utils",
-    version="0.2",
+    version="0.3",
     author="Brice Arnould",
     author_email="b.arnould@criteo.com",
     maintainer="Corentin Chary",
