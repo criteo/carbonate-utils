@@ -2,6 +2,9 @@ nose
 mock
 coverage
 nosexcover
+configparser
+enum34
+pycodestyle
 flake8
 mccabe
 tox
