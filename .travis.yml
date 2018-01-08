@@ -3,6 +3,6 @@ env:
   - TOXENV=py27
   - TOXENV=lint
 install:
-  - pip install tox
+  - pip install six tox
 script:
   - tox
